@@ -128,30 +128,27 @@ function saveChatMessage(role, text) {
     localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
 }
 
-// --- Direct Mistral integration (embedded API key for prototype) ---------
-// WARNING: embedding API keys client-side is insecure. This is only for
-// quick prototyping as you requested.
-const MISTRAL_API_KEY_EMBED = 'xZmsmdeH0E2EMCJF2kBmZjqDTHZ9mIos';
+// --- Chat integration via serverless proxy (`/api/mistral`) --------------
+// The serverless function (on Vercel) should hold the API key in environment
+// variable and forward the request to Mistral. Front-end simply posts to it.
 const MISTRAL_AGENT_ID = 'ag_019a99f9c58677eea260bb701335c30b';
 
-async function mistralDirectSend(input) {
+async function mistralProxySend(input) {
+    const proxyUrl = window.MISTRAL_PROXY_URL || '/api/mistral';
     const payload = { agent_id: MISTRAL_AGENT_ID, inputs: input };
-    const res = await fetch('https://api.mistral.ai/v1/conversations', {
+    const res = await fetch(proxyUrl, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-API-KEY': MISTRAL_API_KEY_EMBED
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
         const text = await res.text().catch(() => '');
-        throw new Error(`Mistral API error ${res.status}: ${text}`);
+        throw new Error(`Proxy error ${res.status}: ${text}`);
     }
 
     const json = await res.json();
-    // Try to get human-friendly text
+    // Extract friendly text from known shapes
     let text = null;
     try {
         if (json.outputs && Array.isArray(json.outputs) && json.outputs[0] && json.outputs[0].content) {
@@ -164,6 +161,7 @@ async function mistralDirectSend(input) {
                 text = m.content[0].text;
             }
         }
+        if (!text && typeof json.text === 'string') text = json.text;
         if (!text) text = JSON.stringify(json);
     } catch (e) {
         text = JSON.stringify(json);
@@ -186,8 +184,8 @@ $('#chatSend').on('click', function () {
         loadChat();
 
         try {
-            // Direct send to Mistral (embedded key)
-            const resp = await mistralDirectSend(txt);
+            // Send via serverless proxy (Vercel): '/api/mistral' (uses server env key)
+            const resp = await mistralProxySend(txt);
             saveChatMessage('ai', resp && resp.text ? resp.text : JSON.stringify(resp && resp.raw ? resp.raw : resp));
         } catch (err) {
             saveChatMessage('ai', 'Erro ao contatar o treinador: ' + (err && err.message ? err.message : String(err)));
