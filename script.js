@@ -1,5 +1,6 @@
 const DAYS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
-let data = JSON.parse(localStorage.getItem("treinos_v1") || "{}");
+// let data = JSON.parse(localStorage.getItem("treinos_v1") || "{}");
+let data = {};
 if (!data.days) data.days = {};
 
 function save() {
