@@ -103,8 +103,15 @@
         </div>
 
         <div class="tab-content hidden" id="tab-calendario">
-            <h2 class="text-xl font-bold mb-4">Calendário</h2>
-            <div class="note">Calendário simples — placeholder. Aqui você pode integrar um calendário real.</div>
+            <div class="calendar-toolbar">
+                <button id="calendarPrev" class="btn-secondary small" aria-label="Semanas anteriores"><i class="bi bi-chevron-left"></i></button>
+                <div class="calendar-range">
+                    <span id="calendarRangeLabel"></span>
+                </div>
+                <button id="calendarNext" class="btn-secondary small" aria-label="Próximas semanas"><i class="bi bi-chevron-right"></i></button>
+            </div>
+            <div class="note">Visualize blocos de 4 semanas. Clique na semana para editar tipo/carga ou escolha um dia para adicionar observações.</div>
+            <div id="calendarWeeks" class="calendar-weeks"></div>
         </div>
 
         <div class="tab-content hidden" id="tab-historico">
@@ -163,6 +170,42 @@
                 <button id="fichaSaveBtn" class="btn-primary">Salvar alterações</button>
                 <button id="fichaDeleteBtn" class="btn-danger">Excluir ficha</button>
                 <button id="fichaModalClose" class="btn-secondary">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="weekModalWrap" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4">
+        <div class="modal ficha-modal">
+            <h3 class="modal-title">Configurar semana</h3>
+            <label class="modal-label" for="weekTypeSelect">Tipo da semana</label>
+            <select id="weekTypeSelect" class="modal-input">
+                <option value="Base">Base</option>
+                <option value="Volume">Volume</option>
+                <option value="Intensificação">Intensificação</option>
+                <option value="Deload">Deload</option>
+                <option value="Peak">Peak</option>
+                <option value="Off">Off / Recuperação</option>
+            </select>
+            <label class="modal-label" for="weekLoadInput">Carga prevista (%)</label>
+            <input id="weekLoadInput" type="number" min="0" max="150" class="modal-input" placeholder="Ex.: 85" />
+            <label class="modal-label" for="weekNoteInput">Observações gerais</label>
+            <textarea id="weekNoteInput" rows="4" class="modal-input" placeholder="Detalhes do foco da semana..."></textarea>
+            <div class="actions">
+                <button id="weekModalSave" class="btn-primary">Salvar</button>
+                <button id="weekModalClose" class="btn-secondary">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="dayModalWrap" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4">
+        <div class="modal ficha-modal">
+            <h3 class="modal-title" id="dayModalTitle">Anotar dia</h3>
+            <div class="note" id="dayModalSubtitle"></div>
+            <textarea id="dayNoteInput" rows="5" class="modal-input"></textarea>
+            <div class="actions">
+                <button id="dayModalSave" class="btn-primary">Salvar anotação</button>
+                <button id="dayModalDelete" class="btn-danger">Limpar</button>
+                <button id="dayModalClose" class="btn-secondary">Fechar</button>
             </div>
         </div>
     </div>

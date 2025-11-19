@@ -1,5 +1,4 @@
 const DAYS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
-
 let data = JSON.parse(localStorage.getItem("treinos_v1") || "{}");
 if (!data.days) data.days = {};
 
@@ -470,6 +469,238 @@ function attemptSaveWithRetry() {
 // --- end retry manager -----------------------------------------------------
 
 const today = (new Date().getDay() + 6) % 7;
+
+// --- Calendar weekly view ----------------------------------------------------
+const CALENDAR_STORAGE_KEY = 'treinos_calendar_v1';
+const CALENDAR_STATE_KEY = 'treinos_calendar_state';
+const CALENDAR_VISIBLE_WEEKS = 4;
+const CAL_DAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+let calendarData = {};
+try {
+    calendarData = JSON.parse(localStorage.getItem(CALENDAR_STORAGE_KEY) || '{}');
+} catch (e) {
+    calendarData = {};
+}
+if (!calendarData.weeks) calendarData.weeks = {};
+
+let calendarState = loadCalendarState();
+let weekModalKey = null;
+let dayModalContext = { weekKey: null, dateKey: null };
+
+function loadCalendarState() {
+    const stored = localStorage.getItem(CALENDAR_STATE_KEY);
+    if (stored) {
+        const d = new Date(stored);
+        if (!isNaN(d)) return getMonday(d);
+    }
+    return getMonday(new Date());
+}
+
+function saveCalendarState() {
+    localStorage.setItem(CALENDAR_STATE_KEY, calendarState.toISOString());
+}
+
+function saveCalendarData() {
+    localStorage.setItem(CALENDAR_STORAGE_KEY, JSON.stringify(calendarData));
+}
+
+function getMonday(date) {
+    const d = new Date(date);
+    const day = d.getDay(); // 0 sunday
+    const diff = (day + 6) % 7;
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - diff);
+    return d;
+}
+
+function addDays(base, num) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + num);
+    return d;
+}
+
+function cleanLocaleLabel(str) {
+    return (str || '').replace(/\./g, '').replace(/\sde\s/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function formatShortDayLabel(date) {
+    return cleanLocaleLabel(date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }));
+}
+
+function formatDateRange(start, end) {
+    const sameYear = start.getFullYear() === end.getFullYear();
+    const startStr = sameYear
+        ? formatShortDayLabel(start)
+        : cleanLocaleLabel(start.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }));
+    const endStr = cleanLocaleLabel(end.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }));
+    return `${startStr} — ${endStr}`;
+}
+
+function formatWeekRangeLabel(start, end) {
+    return `${formatShortDayLabel(start)} — ${formatShortDayLabel(end)}`;
+}
+
+function getWeekKey(date) {
+    return getMonday(date).toISOString().slice(0, 10);
+}
+
+function ensureWeekEntry(weekKey) {
+    if (!calendarData.weeks[weekKey]) {
+        calendarData.weeks[weekKey] = {
+            type: 'Base',
+            load: 100,
+            note: '',
+            days: {}
+        };
+    }
+    return calendarData.weeks[weekKey];
+}
+
+function renderCalendarWeeks() {
+    const container = $('#calendarWeeks');
+    if (!container.length) return;
+    container.empty();
+
+    const start = calendarState;
+    const end = addDays(start, CALENDAR_VISIBLE_WEEKS * 7 - 1);
+    $('#calendarRangeLabel').text(formatDateRange(start, end));
+
+    for (let i = 0; i < CALENDAR_VISIBLE_WEEKS; i++) {
+        const weekStart = addDays(start, i * 7);
+        const weekEnd = addDays(weekStart, 6);
+        const weekKey = getWeekKey(weekStart);
+        const entry = calendarData.weeks[weekKey] || null;
+        const typeLabel = entry && entry.type ? entry.type : 'Base';
+        const loadLabel = entry && typeof entry.load === 'number' ? entry.load : 100;
+        const note = entry && entry.note ? entry.note : 'Sem observações para esta semana.';
+        const noteClass = entry && entry.note ? '' : 'empty';
+
+        const rangeLabel = formatWeekRangeLabel(weekStart, weekEnd);
+        const card = $(`
+            <div class="calendar-week-card" data-week-key="${weekKey}" tabindex="0" role="button">
+                <div class="calendar-week-head">
+                    <div class="calendar-week-title">Semana ${i + 1}</div>
+                    <div class="calendar-week-range">${rangeLabel}</div>
+                    <div class="calendar-week-meta">
+                        <span class="badge">${typeLabel}</span>
+                        <span class="badge load">${loadLabel}%</span>
+                    </div>
+                    <div class="calendar-week-actions">
+                        <button class="btn-secondary small week-edit" data-week-key="${weekKey}">Editar semana</button>
+                    </div>
+                </div>
+                <div class="calendar-week-days" id="week-days-${weekKey}"></div>
+                <div class="calendar-week-note ${noteClass}">${note}</div>
+            </div>
+        `);
+        container.append(card);
+
+        const daysWrap = card.find('.calendar-week-days');
+        for (let d = 0; d < 7; d++) {
+            const dayDate = addDays(weekStart, d);
+            const dateKey = dayDate.toISOString().slice(0, 10);
+            const dayNote = entry && entry.days && entry.days[dateKey] ? entry.days[dateKey] : '';
+            const hasNote = !!dayNote;
+            const snippet = hasNote ? `<span class="week-day-note">${dayNote.slice(0, 40)}${dayNote.length > 40 ? '…' : ''}</span>` : '';
+            const dayLabel = formatShortDayLabel(dayDate);
+            const btn = $(`
+                <button class="week-day ${hasNote ? 'has-note' : ''}" data-week-key="${weekKey}" data-date-key="${dateKey}">
+                    <span class="week-day-label">${CAL_DAY_LABELS[d]}</span>
+                    <span class="week-day-date">${dayLabel}</span>
+                    ${snippet}
+                </button>
+            `);
+            daysWrap.append(btn);
+        }
+    }
+}
+
+function openWeekModal(weekKey) {
+    weekModalKey = weekKey;
+    const entry = ensureWeekEntry(weekKey);
+    $('#weekTypeSelect').val(entry.type || 'Base');
+    $('#weekLoadInput').val(typeof entry.load === 'number' ? entry.load : 100);
+    $('#weekNoteInput').val(entry.note || '');
+    $('#weekModalWrap').removeClass('hidden').addClass('flex');
+}
+
+function closeWeekModal() {
+    weekModalKey = null;
+    $('#weekModalWrap').addClass('hidden').removeClass('flex');
+}
+
+function openDayModal(weekKey, dateKey) {
+    dayModalContext = { weekKey, dateKey };
+    const entry = ensureWeekEntry(weekKey);
+    const note = entry.days && entry.days[dateKey] ? entry.days[dateKey] : '';
+    const dateObj = new Date(dateKey);
+    $('#dayModalTitle').text('Anotações do dia');
+    $('#dayModalSubtitle').text(dateObj.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' }));
+    $('#dayNoteInput').val(note);
+    $('#dayModalWrap').removeClass('hidden').addClass('flex');
+}
+
+function closeDayModal() {
+    dayModalContext = { weekKey: null, dateKey: null };
+    $('#dayModalWrap').addClass('hidden').removeClass('flex');
+}
+
+let calendarUnsubscribe = null;
+
+function getCalendarCollectionRef() {
+    const db = getFirestore();
+    if (!db) return null;
+    return db.collection('app').doc('users').collection('users').doc(STATIC_USER_ID).collection('calendarWeeks');
+}
+
+async function persistWeekToFirestore(weekKey) {
+    const col = getCalendarCollectionRef();
+    if (!col) throw new Error('Firestore não inicializado');
+    const entry = ensureWeekEntry(weekKey);
+    const payload = {
+        type: entry.type || 'Base',
+        load: typeof entry.load === 'number' ? entry.load : 100,
+        note: entry.note || '',
+        days: entry.days || {},
+        startDate: weekKey,
+        updated_at: (firebase && firebase.firestore && firebase.firestore.FieldValue && firebase.firestore.FieldValue.serverTimestamp) ?
+            firebase.firestore.FieldValue.serverTimestamp() : Date.now()
+    };
+    await col.doc(weekKey).set(payload, { merge: true });
+}
+
+function initCalendarRealtime() {
+    try {
+        const col = getCalendarCollectionRef();
+        if (!col) {
+            console.warn('Calendário: Firestore não disponível');
+            return;
+        }
+        if (calendarUnsubscribe) calendarUnsubscribe();
+        calendarUnsubscribe = col.onSnapshot(snapshot => {
+            const weeks = {};
+            snapshot.forEach(doc => {
+                const data = doc.data() || {};
+                weeks[doc.id] = {
+                    type: data.type || 'Base',
+                    load: typeof data.load === 'number' ? data.load : 100,
+                    note: data.note || '',
+                    days: data.days || {}
+                };
+            });
+            calendarData.weeks = weeks;
+            saveCalendarData();
+            renderCalendarWeeks();
+        }, err => {
+            console.warn('Calendário snapshot error', err);
+            showToast('warning', 'Falha ao sincronizar calendário');
+        });
+    } catch (e) {
+        console.warn('initCalendarRealtime error', e);
+    }
+}
+
+// --- end calendar ------------------------------------------------------------
 
 function seededExtraMinutes(dayIndex, exIndex) {
     const seed = ((dayIndex + 1) * 73856093) ^ ((exIndex + 1) * 19349663);
@@ -1547,4 +1778,110 @@ $(function () {
     $('#newFichaBtn').off('click').on('click', function () {
         criarNovaFicha(STATIC_USER_ID);
     });
+
+    $('#calendarPrev').off('click').on('click', function () {
+        calendarState = addDays(calendarState, -CALENDAR_VISIBLE_WEEKS * 7);
+        saveCalendarState();
+        renderCalendarWeeks();
+    });
+    $('#calendarNext').off('click').on('click', function () {
+        calendarState = addDays(calendarState, CALENDAR_VISIBLE_WEEKS * 7);
+        saveCalendarState();
+        renderCalendarWeeks();
+    });
+
+    $(document).off('click.calendarWeekEdit').on('click.calendarWeekEdit', '.week-edit', function () {
+        const weekKey = $(this).data('weekKey');
+        if (!weekKey) return;
+        openWeekModal(weekKey);
+    });
+
+    $(document).off('click.calendarWeekDay').on('click.calendarWeekDay', '.week-day', function () {
+        const weekKey = $(this).data('weekKey');
+        const dateKey = $(this).data('dateKey');
+        if (!weekKey || !dateKey) return;
+        openDayModal(weekKey, dateKey);
+    });
+
+    $(document).off('click.calendarWeekCard').on('click.calendarWeekCard', '.calendar-week-card', function (e) {
+        if ($(e.target).closest('.week-day, .week-edit').length) return;
+        const weekKey = $(this).data('weekKey');
+        if (!weekKey) return;
+        openWeekModal(weekKey);
+    });
+    $(document).off('keydown.calendarWeekCard').on('keydown.calendarWeekCard', '.calendar-week-card', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if ($(e.target).closest('.week-day, .week-edit').length) return;
+        e.preventDefault();
+        const weekKey = $(this).data('weekKey');
+        if (!weekKey) return;
+        openWeekModal(weekKey);
+    });
+
+    $('#weekModalSave').off('click').on('click', async function () {
+        if (!weekModalKey) return;
+        const targetWeek = weekModalKey;
+        const entry = ensureWeekEntry(targetWeek);
+        entry.type = $('#weekTypeSelect').val() || 'Base';
+        const loadVal = parseInt($('#weekLoadInput').val(), 10);
+        entry.load = Number.isFinite(loadVal) ? Math.min(150, Math.max(0, loadVal)) : 100;
+        entry.note = $('#weekNoteInput').val().trim();
+        saveCalendarData();
+        closeWeekModal();
+        renderCalendarWeeks();
+        try {
+            await persistWeekToFirestore(targetWeek);
+            showToast('success', 'Semana salva');
+        } catch (e) {
+            console.warn('persistWeekToFirestore failed', e);
+            showToast('warning', 'Falha ao sincronizar semana');
+        }
+    });
+    $('#weekModalClose').off('click').on('click', function () {
+        closeWeekModal();
+    });
+
+    $('#dayModalSave').off('click').on('click', async function () {
+        const ctx = { ...dayModalContext };
+        if (!ctx.weekKey || !ctx.dateKey) return;
+        const entry = ensureWeekEntry(ctx.weekKey);
+        if (!entry.days) entry.days = {};
+        const note = $('#dayNoteInput').val().trim();
+        if (note) entry.days[ctx.dateKey] = note;
+        else delete entry.days[ctx.dateKey];
+        saveCalendarData();
+        closeDayModal();
+        renderCalendarWeeks();
+        try {
+            await persistWeekToFirestore(ctx.weekKey);
+            showToast('success', 'Anotação salva');
+        } catch (e) {
+            console.warn('persist day note failed', e);
+            showToast('warning', 'Falha ao sincronizar anotação');
+        }
+    });
+    $('#dayModalDelete').off('click').on('click', async function () {
+        const ctx = { ...dayModalContext };
+        if (!ctx.weekKey || !ctx.dateKey) return;
+        const entry = ensureWeekEntry(ctx.weekKey);
+        if (entry.days && entry.days[ctx.dateKey]) {
+            delete entry.days[ctx.dateKey];
+            saveCalendarData();
+        }
+        closeDayModal();
+        renderCalendarWeeks();
+        try {
+            await persistWeekToFirestore(ctx.weekKey);
+            showToast('success', 'Anotação removida');
+        } catch (e) {
+            console.warn('delete day note sync failed', e);
+            showToast('warning', 'Falha ao sincronizar anotação');
+        }
+    });
+    $('#dayModalClose').off('click').on('click', function () {
+        closeDayModal();
+    });
+
+    renderCalendarWeeks();
+    initCalendarRealtime();
 });
