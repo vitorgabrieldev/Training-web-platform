@@ -234,9 +234,27 @@ body {
 .tab-content { margin-top: 6px; }
 .tab-content.hidden { display: none; }
 
+/* Make tab content fill available viewport — chat uses full screen */
+.app-shell { min-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.tab-content { flex: 1 1 auto; display: flex; flex-direction: column; }
+
+/* Chat-specific: take full width and height available */
+#tab-chat .chat-box {
+  width: 100%;
+  max-width: none;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  gap: 12px;
+}
+.chat-messages { flex: 1 1 auto; overflow: auto; padding: 8px; height: 100%; }
+.chat-input-row { margin-top: 8px; flex-shrink: 0; display: flex; gap: 8px; }
+.chat-input-row input { min-width: 0; }
+
 /* Chat placeholders */
-.chat-box { background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; max-width: 900px; }
-.chat-messages { max-height: 320px; overflow: auto; padding: 8px; display:flex; flex-direction:column; gap:8px; }
+.chat-box { background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; max-width: 100%; }
+.chat-messages { overflow: auto; padding: 8px; display:flex; flex-direction:column; gap:8px; }
 .chat-msg { padding: 8px 10px; border-radius: 8px; max-width: 85%; }
 .chat-msg.user { background: rgba(96,62,215,0.12); align-self: flex-end; }
 .chat-msg.ai { background: rgba(255,255,255,0.03); color: var(--muted); align-self: flex-start; }
