@@ -122,7 +122,14 @@ function loadChat() {
         if (m.role === 'loading') {
             container.append(`<div class="${cls}"><span class="chat-loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>`);
         } else if (m.role === 'ai') {
-            container.append(`<div class="${cls}">${renderAiMessage(m.text)}</div>`);
+            const finalHtml = renderAiMessage(m.text);
+            if (m.animate) {
+                const el = $(`<div class="${cls} typing"></div>`);
+                container.append(el);
+                startAiTypewriter(el, m, finalHtml);
+            } else {
+                container.append(`<div class="${cls}">${finalHtml}</div>`);
+            }
         } else {
             // user or other
             const safe = String(m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -149,6 +156,9 @@ function renderAiMessage(text) {
         if (trimmed.startsWith('- ')) {
             if (!inList) { out.push('<ul>'); inList = true; }
             out.push(`<li>${trimmed.slice(2)}</li>`);
+        } else if (trimmed === '---' || trimmed === '--') {
+            if (inList) { out.push('</ul>'); inList = false; }
+            out.push('<hr/>');
         } else {
             if (inList) { out.push('</ul>'); inList = false; }
             if (trimmed === '') out.push('<br/>'); else out.push(`<p>${trimmed}</p>`);
@@ -170,17 +180,31 @@ function replaceLastLoadingWithAi(text) {
     const raw = localStorage.getItem(CHAT_KEY) || '[]';
     let msgs = [];
     try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
+    const formatted = formatAiResponseText(text);
     // find last loading message
     for (let i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i].role === 'loading') {
-            msgs[i] = { role: 'ai', text, ts: Date.now() };
+            msgs[i] = { role: 'ai', text: formatted, ts: Date.now(), animate: true };
             localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
             return;
         }
     }
     // fallback: append
-    msgs.push({ role: 'ai', text, ts: Date.now() });
+    msgs.push({ role: 'ai', text: formatted, ts: Date.now(), animate: true });
     localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
+}
+
+function formatAiResponseText(text) {
+    if (text === null || text === undefined) return '';
+    let s = String(text).trim();
+    if (/^resposta[:\-]/i.test(s)) {
+        s = s.replace(/^resposta[:\-]\s*/i, '');
+    }
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+        s = s.slice(1, -1).trim();
+    }
+    s = s.replace(/"/g, '');
+    return s;
 }
 
 function buildContextForSend(maxMessages, currentInput) {
@@ -222,6 +246,46 @@ function buildTrainingSummary() {
     }
     lines.push('Use essas informações para responder de forma personalizada sobre o treino.');
     return lines.join('\n');
+}
+
+function startAiTypewriter($el, messageMeta, finalHtml) {
+    const words = String(messageMeta.text || '').split(/\s+/).filter(Boolean);
+    if (!words.length) {
+        $el.html(finalHtml);
+        markAiMessageAnimated(messageMeta.ts);
+        return;
+    }
+    let idx = 0;
+    const step = () => {
+        idx++;
+        const current = words.slice(0, idx).join(' ');
+        $el.text(current);
+        if (idx >= words.length) {
+            setTimeout(() => {
+                $el.removeClass('typing').html(finalHtml);
+                markAiMessageAnimated(messageMeta.ts);
+            }, 120);
+            return;
+        }
+        setTimeout(step, 130);
+    };
+    step();
+}
+
+function markAiMessageAnimated(ts) {
+    if (!ts) return;
+    const raw = localStorage.getItem(CHAT_KEY) || '[]';
+    let msgs = [];
+    try { msgs = JSON.parse(raw); } catch (e) { return; }
+    let updated = false;
+    msgs = msgs.map(m => {
+        if (m.role === 'ai' && m.ts === ts && m.animate) {
+            updated = true;
+            return { ...m, animate: false };
+        }
+        return m;
+    });
+    if (updated) localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
 }
 
 // --- Chat integration via serverless proxy (`/api/mistral`) --------------
@@ -844,12 +908,11 @@ $("#deleteExercise").click(async () => {
 });
 
 // --- Firestore fichas (estrutura nativa compat v9) ---------------------------
-
-const STATIC_USER_ID = 'hNceMxA9i1O71wDSRpWAEuCU8et2'; // usuário fixo (substitua se desejar)
+const STATIC_USER_ID = 'hNceMxA9i1O71wDSRpWAEuCU8et2';
 let currentFichaId = null;
 let currentFichaName = '';
 let fichaNamesCache = {};
-let currentFichaMap = {}; // mapping: dias[index] = { id: diaId, exercicios: [exId,...] }
+let currentFichaMap = {};
 let unsubscribes = { fichas: null, dias: null };
 
 function getFirestore() {
