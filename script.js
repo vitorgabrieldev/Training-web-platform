@@ -114,8 +114,18 @@ function loadChat() {
     const container = $('#chatMessages');
     container.empty();
     msgs.forEach(m => {
-        const cls = m.role === 'user' ? 'chat-msg user' : 'chat-msg ai';
-        container.append(`<div class="${cls}">${m.text}</div>`);
+        let cls = '';
+        if (m.role === 'user') cls = 'chat-msg user';
+        else if (m.role === 'ai') cls = 'chat-msg ai enter';
+        else if (m.role === 'loading') cls = 'chat-msg ai';
+
+        if (m.role === 'loading') {
+            container.append(`<div class="${cls}"><span class="chat-loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>`);
+        } else {
+            // escape HTML to avoid accidental injection (we allow simple text and markdown)
+            const safe = String(m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            container.append(`<div class="${cls}">${safe}</div>`);
+        }
     });
     container.scrollTop(container.prop('scrollHeight'));
 }
@@ -125,6 +135,23 @@ function saveChatMessage(role, text) {
     let msgs = [];
     try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
     msgs.push({ role, text, ts: Date.now() });
+    localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
+}
+
+function replaceLastLoadingWithAi(text) {
+    const raw = localStorage.getItem(CHAT_KEY) || '[]';
+    let msgs = [];
+    try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
+    // find last loading message
+    for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'loading') {
+            msgs[i] = { role: 'ai', text, ts: Date.now() };
+            localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
+            return;
+        }
+    }
+    // fallback: append
+    msgs.push({ role: 'ai', text, ts: Date.now() });
     localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
 }
 
@@ -148,25 +175,55 @@ async function mistralProxySend(input) {
     }
 
     const json = await res.json();
-    // Extract friendly text from known shapes
-    let text = null;
-    try {
-        if (json.outputs && Array.isArray(json.outputs) && json.outputs[0] && json.outputs[0].content) {
-            const c = json.outputs[0].content;
-            if (Array.isArray(c) && c[0] && typeof c[0].text === 'string') text = c[0].text;
+    // Extract friendly text from known shapes and nested content
+    function extractText(obj) {
+        if (!obj) return null;
+        if (typeof obj === 'string') return obj;
+        if (typeof obj.text === 'string') return obj.text;
+        if (typeof obj.content === 'string') return obj.content;
+        // if content is array, join inner texts
+        if (Array.isArray(obj.content)) {
+            const parts = obj.content.map(c => extractText(c)).filter(Boolean);
+            if (parts.length) return parts.join('\n\n');
         }
-        if (!text && json.choices && Array.isArray(json.choices) && json.choices[0]) {
-            const m = json.choices[0].message;
-            if (m && m.content && Array.isArray(m.content) && m.content[0] && typeof m.content[0].text === 'string') {
-                text = m.content[0].text;
+        // outputs -> content
+        if (Array.isArray(obj.outputs)) {
+            for (const out of obj.outputs) {
+                const t = extractText(out);
+                if (t) return t;
             }
         }
-        if (!text && typeof json.text === 'string') text = json.text;
-        if (!text) text = JSON.stringify(json);
-    } catch (e) {
-        text = JSON.stringify(json);
+        // choices -> message -> content
+        if (Array.isArray(obj.choices)) {
+            for (const ch of obj.choices) {
+                if (ch && ch.message) {
+                    const t = extractText(ch.message);
+                    if (t) return t;
+                }
+            }
+        }
+        // search recursively for any `text` string deep in the object
+        try {
+            const stack = [obj];
+            while (stack.length) {
+                const cur = stack.shift();
+                if (!cur || typeof cur !== 'object') continue;
+                if (typeof cur.text === 'string') return cur.text;
+                if (typeof cur.content === 'string') return cur.content;
+                for (const k of Object.keys(cur)) {
+                    const v = cur[k];
+                    if (typeof v === 'string' && (k.toLowerCase().includes('text') || k.toLowerCase().includes('content'))) return v;
+                    if (typeof v === 'object') stack.push(v);
+                }
+            }
+        } catch (e) {
+            // ignore
+        }
+
+        return null;
     }
 
+    let text = extractText(json) || JSON.stringify(json);
     return { raw: json, text };
 }
 

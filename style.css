@@ -240,6 +240,25 @@ body {
 .chat-msg { padding: 8px 10px; border-radius: 8px; max-width: 85%; }
 .chat-msg.user { background: rgba(96,62,215,0.12); align-self: flex-end; }
 .chat-msg.ai { background: rgba(255,255,255,0.03); color: var(--muted); align-self: flex-start; }
+.chat-msg.ai.enter { animation: ai-enter 360ms cubic-bezier(.22,.9,.32,1); }
+
+@keyframes ai-enter {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Loading three dots */
+.chat-loading { display:inline-flex; gap:6px; align-items: center; }
+.chat-loading .dot { width:8px; height:8px; background: rgba(255,255,255,0.6); border-radius:50%; display:inline-block; transform: translateY(0); }
+.chat-loading .dot:nth-child(1) { animation: bounce 900ms infinite; animation-delay: 0ms; }
+.chat-loading .dot:nth-child(2) { animation: bounce 900ms infinite; animation-delay: 120ms; }
+.chat-loading .dot:nth-child(3) { animation: bounce 900ms infinite; animation-delay: 240ms; }
+@keyframes bounce {
+  0% { transform: translateY(0); }
+  25% { transform: translateY(-6px); }
+  50% { transform: translateY(0); }
+  100% { transform: translateY(0); }
+}
 .chat-input-row { display:flex; gap:8px; margin-top:8px; }
 .chat-input-row input { flex:1; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:inherit; }
 .series-list {
