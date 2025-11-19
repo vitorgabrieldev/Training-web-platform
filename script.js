@@ -560,9 +560,15 @@ function initSortables() {
         const day = $col.find('.editbtn').data('day');
         if (typeof day === 'undefined') return;
         new Sortable(this, {
+            group: 'days',
             animation: 150,
-            draggable: '.card',
-            handle: '.card',
+            // Só arrastar pelo handle
+            handle: '.drag-handle',
+            // Exige segurar por 2000ms em dispositivos touch para iniciar o drag
+            delay: 2000,
+            delayOnTouchOnly: true,
+            // Pequena tolerância para evitar cancela em taps
+            fallbackTolerance: 5,
             onEnd: function (evt) {
                 // compute new order by reading data-ex-index from cards
                 const cards = $col.children('.card');
