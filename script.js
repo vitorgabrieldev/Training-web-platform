@@ -299,6 +299,12 @@ $('#chatInput').on('keydown', function (e) {
     if (e.key === 'Enter') { $('#chatSend').trigger('click'); }
 });
 
+// Clear chat button
+$('#chatClear').on('click', function () {
+    localStorage.removeItem(CHAT_KEY);
+    loadChat();
+});
+
 
 // --- Sync queue / retry manager ---------------------------------------------
 const PENDING_KEY = 'treinos_pending';
