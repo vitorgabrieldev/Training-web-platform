@@ -121,13 +121,41 @@ function loadChat() {
 
         if (m.role === 'loading') {
             container.append(`<div class="${cls}"><span class="chat-loading"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>`);
+        } else if (m.role === 'ai') {
+            container.append(`<div class="${cls}">${renderAiMessage(m.text)}</div>`);
         } else {
-            // escape HTML to avoid accidental injection (we allow simple text and markdown)
+            // user or other
             const safe = String(m.text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             container.append(`<div class="${cls}">${safe}</div>`);
         }
     });
     container.scrollTop(container.prop('scrollHeight'));
+}
+
+function renderAiMessage(text) {
+    if (!text) return '';
+    // escape first
+    let s = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Convert **bold** to <strong>
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Convert lines starting with - into a list
+    const lines = s.split(/\r?\n/);
+    let out = [];
+    let inList = false;
+    lines.forEach(line => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('- ')) {
+            if (!inList) { out.push('<ul>'); inList = true; }
+            out.push(`<li>${trimmed.slice(2)}</li>`);
+        } else {
+            if (inList) { out.push('</ul>'); inList = false; }
+            if (trimmed === '') out.push('<br/>'); else out.push(`<p>${trimmed}</p>`);
+        }
+    });
+    if (inList) out.push('</ul>');
+    return out.join('');
 }
 
 function saveChatMessage(role, text) {
@@ -153,6 +181,18 @@ function replaceLastLoadingWithAi(text) {
     // fallback: append
     msgs.push({ role: 'ai', text, ts: Date.now() });
     localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
+}
+
+function buildContextForSend(maxMessages, currentInput) {
+    const raw = localStorage.getItem(CHAT_KEY) || '[]';
+    let msgs = [];
+    try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
+    // filter only user/ai messages and take last maxMessages
+    const convo = msgs.filter(m => m.role === 'user' || m.role === 'ai');
+    const tail = convo.slice(-maxMessages);
+    const parts = tail.map(m => (m.role === 'user' ? `User: ${m.text}` : `Assistant: ${m.text}`));
+    parts.push(`User: ${currentInput}`);
+    return parts.join('\n');
 }
 
 // --- Chat integration via serverless proxy (`/api/mistral`) --------------
@@ -232,20 +272,23 @@ $('#chatSend').on('click', function () {
     (async function () {
         const txt = $('#chatInput').val().trim();
         if (!txt) return;
+        // save user message
         saveChatMessage('user', txt);
         $('#chatInput').val('');
         loadChat();
 
-        // show temporary loading indicator
-        saveChatMessage('ai', '...');
+        // insert loading placeholder (role='loading')
+        saveChatMessage('loading', '');
         loadChat();
 
         try {
-            // Send via serverless proxy (Vercel): '/api/mistral' (uses server env key)
-            const resp = await mistralProxySend(txt);
-            saveChatMessage('ai', resp && resp.text ? resp.text : JSON.stringify(resp && resp.raw ? resp.raw : resp));
+            // build context: last 5 messages (user/ai only)
+            const ctx = buildContextForSend(5, txt);
+            const resp = await mistralProxySend(ctx);
+            // replace last loading with AI response (with animation)
+            replaceLastLoadingWithAi(resp && resp.text ? resp.text : JSON.stringify(resp && resp.raw ? resp.raw : resp));
         } catch (err) {
-            saveChatMessage('ai', 'Erro ao contatar o treinador: ' + (err && err.message ? err.message : String(err)));
+            replaceLastLoadingWithAi('Erro ao contatar o treinador: ' + (err && err.message ? err.message : String(err)));
         }
         loadChat();
     })();
