@@ -87,6 +87,11 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+
+/* cursor pointer on devices with fine pointer (desktop) */
+@media (hover: hover) and (pointer: fine) {
+  .card { cursor: pointer; }
+}
 .card .title {
   display: flex;
   justify-content: space-between;
@@ -104,6 +109,7 @@ body {
   justify-content: space-between;
   padding-bottom: 30px;
 }
+.seriesitem input { min-width: 48px; }
 .seriesitem input {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.204);
@@ -147,6 +153,16 @@ body {
 .card .obs {
   margin-bottom: 6px;
 }
+/* series table inside card */
+.table-wrap { overflow:auto; }
+.series-table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+.series-table thead th { text-align:left; padding:6px 8px; color: var(--muted); font-weight:600; border-bottom:1px solid rgba(255,255,255,0.04); }
+.series-table tbody td { padding:8px 8px; border-bottom: 1px solid rgba(255,255,255,0.02); color: #e6eef9; }
+.series-table tr:last-child td { border-bottom: none; }
+.series-table td { white-space:nowrap; }
+
+/* center table values (but keep headers left for readability) */
+.series-table tbody td { text-align: center; }
 .modalwrap {
   position: fixed;
   inset: 0;
@@ -157,11 +173,7 @@ body {
   z-index: 9999;
 }
 .modal {
-  background: linear-gradient(
-    180deg,
-    rgba(11, 17, 29, 0.96),
-    rgba(8, 12, 20, 0.98)
-  );
+  background: var(--card);
   border-radius: 12px;
   padding: 12px 14px;
   width: 100%;
@@ -190,6 +202,46 @@ body {
   color: inherit;
   margin-bottom: 8px;
 }
+.modal-series-table thead th { font-size: 13px; }
+.modal-series-table tbody td input { width: 100%; padding:6px; border-radius:6px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:inherit; }
+.modal-series-table tbody td { padding:6px; }
+/* When using .seriesitem inside a table, force table layout so columns align properly */
+.modal-series-table .seriesitem { display: table-row; }
+.modal-series-table .seriesitem td { display: table-cell; vertical-align: middle; }
+.modal-series-table .seriesitem td .remove { margin: 0; }
+
+/* Tabs styles */
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.tab-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.04);
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tab-btn:hover { color: var(--accent); }
+.tab-btn.active {
+  background: linear-gradient(90deg, var(--accent), #482bb3);
+  color: #fff;
+  border-color: transparent;
+}
+.tab-content { margin-top: 6px; }
+.tab-content.hidden { display: none; }
+
+/* Chat placeholders */
+.chat-box { background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; max-width: 900px; }
+.chat-messages { max-height: 320px; overflow: auto; padding: 8px; display:flex; flex-direction:column; gap:8px; }
+.chat-msg { padding: 8px 10px; border-radius: 8px; max-width: 85%; }
+.chat-msg.user { background: rgba(96,62,215,0.12); align-self: flex-end; }
+.chat-msg.ai { background: rgba(255,255,255,0.03); color: var(--muted); align-self: flex-start; }
+.chat-input-row { display:flex; gap:8px; margin-top:8px; }
+.chat-input-row input { flex:1; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:inherit; }
 .series-list {
   display: flex;
   flex-direction: column;
@@ -325,4 +377,17 @@ hr {
     border: 1px solid #603ED7;
     color: #603ED7;
     background-color: transparent;
+}
+
+/* input validation error */
+.input-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239,68,68,0.06);
+}
+
+/* larger touch targets on mobile */
+@media (max-width: 640px) {
+  .btn-primary, .btn-secondary, .btn-danger { padding: 12px 14px; font-size: 16px; }
+  .seriesitem input { min-width: 56px; }
+  .card { padding: 12px; }
 }

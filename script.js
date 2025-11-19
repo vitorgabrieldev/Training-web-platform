@@ -63,7 +63,8 @@ async function trySyncOnLoad() {
             localStorage.setItem('treinos_v1', JSON.stringify(remote));
             data = JSON.parse(JSON.stringify(remote));
             if (!data.days) data.days = {};
-            render();
+                render();
+                initSortables();
             return;
         }
     } catch (err) {
@@ -76,6 +77,198 @@ async function trySyncOnLoad() {
         });
     }
 }
+
+// --- Tabs: persist selected tab and switch handler -------------------------
+const TAB_KEY = 'treinos_active_tab';
+function switchTab(tabId) {
+    // hide all tab-content
+    $('.tab-content').addClass('hidden');
+    // remove active from buttons
+    $('.tab-btn').removeClass('active');
+    // show selected
+    $(`#tab-${tabId}`).removeClass('hidden');
+    $(`#tab-btn-${tabId}`).addClass('active');
+    localStorage.setItem(TAB_KEY, tabId);
+}
+
+$(document).on('click', '.tab-btn', function () {
+    const t = $(this).data('tab');
+    if (!t) return;
+    switchTab(t);
+});
+
+function restoreTab() {
+    const saved = localStorage.getItem(TAB_KEY) || 'ficha';
+    // ensure element exists, fallback to ficha
+    const el = $(`#tab-${saved}`);
+    if (!el.length) return switchTab('ficha');
+    switchTab(saved);
+}
+
+// --- Simple local AI-chat placeholder -------------------------------------
+const CHAT_KEY = 'treinos_chat_msgs';
+function loadChat() {
+    const raw = localStorage.getItem(CHAT_KEY) || '[]';
+    let msgs = [];
+    try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
+    const container = $('#chatMessages');
+    container.empty();
+    msgs.forEach(m => {
+        const cls = m.role === 'user' ? 'chat-msg user' : 'chat-msg ai';
+        container.append(`<div class="${cls}">${m.text}</div>`);
+    });
+    container.scrollTop(container.prop('scrollHeight'));
+}
+
+function saveChatMessage(role, text) {
+    const raw = localStorage.getItem(CHAT_KEY) || '[]';
+    let msgs = [];
+    try { msgs = JSON.parse(raw); } catch (e) { msgs = []; }
+    msgs.push({ role, text, ts: Date.now() });
+    localStorage.setItem(CHAT_KEY, JSON.stringify(msgs));
+}
+
+// --- Direct Mistral integration (embedded API key for prototype) ---------
+// WARNING: embedding API keys client-side is insecure. This is only for
+// quick prototyping as you requested.
+const MISTRAL_API_KEY_EMBED = 'xZmsmdeH0E2EMCJF2kBmZjqDTHZ9mIos';
+const MISTRAL_AGENT_ID = 'ag_019a99f9c58677eea260bb701335c30b';
+
+async function mistralDirectSend(input) {
+    const payload = { agent_id: MISTRAL_AGENT_ID, inputs: input };
+    const res = await fetch('https://api.mistral.ai/v1/conversations', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-API-KEY': MISTRAL_API_KEY_EMBED
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`Mistral API error ${res.status}: ${text}`);
+    }
+
+    const json = await res.json();
+    // Try to get human-friendly text
+    let text = null;
+    try {
+        if (json.outputs && Array.isArray(json.outputs) && json.outputs[0] && json.outputs[0].content) {
+            const c = json.outputs[0].content;
+            if (Array.isArray(c) && c[0] && typeof c[0].text === 'string') text = c[0].text;
+        }
+        if (!text && json.choices && Array.isArray(json.choices) && json.choices[0]) {
+            const m = json.choices[0].message;
+            if (m && m.content && Array.isArray(m.content) && m.content[0] && typeof m.content[0].text === 'string') {
+                text = m.content[0].text;
+            }
+        }
+        if (!text) text = JSON.stringify(json);
+    } catch (e) {
+        text = JSON.stringify(json);
+    }
+
+    return { raw: json, text };
+}
+
+
+$('#chatSend').on('click', function () {
+    (async function () {
+        const txt = $('#chatInput').val().trim();
+        if (!txt) return;
+        saveChatMessage('user', txt);
+        $('#chatInput').val('');
+        loadChat();
+
+        // show temporary loading indicator
+        saveChatMessage('ai', '...');
+        loadChat();
+
+        try {
+            // Direct send to Mistral (embedded key)
+            const resp = await mistralDirectSend(txt);
+            saveChatMessage('ai', resp && resp.text ? resp.text : JSON.stringify(resp && resp.raw ? resp.raw : resp));
+        } catch (err) {
+            saveChatMessage('ai', 'Erro ao contatar o treinador: ' + (err && err.message ? err.message : String(err)));
+        }
+        loadChat();
+    })();
+});
+
+// allow Enter to send in chat input
+$('#chatInput').on('keydown', function (e) {
+    if (e.key === 'Enter') { $('#chatSend').trigger('click'); }
+});
+
+
+// --- Sync queue / retry manager ---------------------------------------------
+const PENDING_KEY = 'treinos_pending';
+let retryTimer = null;
+const RETRY_INTERVAL = 10000; // 10s
+
+function showToast(icon, title) {
+    Swal.fire({ toast: true, position: 'top-end', icon, title, showConfirmButton: false, timer: 2000 });
+}
+
+function enqueuePending(payload) {
+    try {
+        localStorage.setItem(PENDING_KEY, JSON.stringify({ payload, ts: Date.now() }));
+    } catch (e) {
+        console.warn('enqueue pending failed', e);
+    }
+    startRetryTimer();
+}
+
+function clearPending() {
+    localStorage.removeItem(PENDING_KEY);
+}
+
+async function processPendingQueue() {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return;
+    let item;
+    try { item = JSON.parse(raw); } catch (e) { clearPending(); return; }
+
+    // show loading
+    Swal.fire({ title: 'Sincronizando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    try {
+        await saveRemoteData(item.payload);
+        clearPending();
+        Swal.close();
+        showToast('success', 'Sincronizado');
+    } catch (err) {
+        Swal.close();
+        const m = err && err.message ? err.message : String(err);
+        showToast('warning', 'Ainda não sincronizado');
+        console.warn('Retry failed', m);
+        // keep pending, will retry later
+    }
+}
+
+function startRetryTimer() {
+    if (retryTimer) return;
+    retryTimer = setInterval(() => {
+        if (navigator.onLine) processPendingQueue();
+    }, RETRY_INTERVAL);
+}
+
+window.addEventListener('online', () => { processPendingQueue(); });
+
+// attempt save with retry/queue on fail
+function attemptSaveWithRetry() {
+    saveRemoteData(data).then(() => {
+        showToast('success', 'Sincronizado');
+    }).catch(err => {
+        console.warn('saveRemoteData failed', err);
+        enqueuePending(data);
+        const m = err && err.message ? err.message : String(err);
+        showToast('warning', 'Sincronização adiada');
+        console.warn(m);
+    });
+}
+
+// --- end retry manager -----------------------------------------------------
 
 const today = (new Date().getDay() + 6) % 7;
 
@@ -199,8 +392,8 @@ function render() {
 
         col.append(head);
 
-        data.days[key].forEach(ex => {
-            const card = $("<div class='card'></div>");
+        data.days[key].forEach((ex, exIndex) => {
+            const card = $("<div class='card' data-ex-index='" + exIndex + "'></div>");
             let html = `
                 <div class='title'>
                         <div>
@@ -210,13 +403,42 @@ function render() {
                     </div>
             `;
 
-            ex.series.forEach((s, idx) => {
-                html += `
-                    <div class='small series'>
-                        Série ${idx + 1}: ${s.peso}kg RPE ${s.rpe} Desc ${s.descanso}
-                    </div>
-                `;
-            });
+                        if (ex.series && ex.series.length) {
+                                html += `
+                                        <div class="table-wrap">
+                                            <table class="series-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Série</th>
+                                                        <th>Peso</th>
+                                                        <th>Repetições</th>
+                                                        <th>RPE</th>
+                                                        <th>Descanso</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                `;
+
+                                ex.series.forEach((s, idx) => {
+                                        html += `
+                                                    <tr>
+                                                        <td>${idx + 1}</td>
+                                                        <td>${s.peso || ''}</td>
+                                                        <td>${s.reps || ''}</td>
+                                                        <td>${s.rpe || ''}</td>
+                                                        <td>${s.descanso || ''}</td>
+                                                    </tr>
+                                        `;
+                                });
+
+                                html += `
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                `;
+                        } else {
+                                html += `<div class='small note'>Nenhuma série</div>`;
+                        }
 
             card.html(html);
             col.append(card);
@@ -224,6 +446,34 @@ function render() {
 
         g.append(col);
     }
+}
+
+// initialize Sortable on each column (exercise reorder)
+function initSortables() {
+    $('.col').each(function () {
+        const $col = $(this);
+        if ($col.data('sortable')) return; // already initialized
+        const day = $col.find('.editbtn').data('day');
+        if (typeof day === 'undefined') return;
+        new Sortable(this, {
+            animation: 150,
+            draggable: '.card',
+            handle: '.card',
+            onEnd: function (evt) {
+                // compute new order by reading data-ex-index from cards
+                const cards = $col.children('.card');
+                const newOrder = cards.map((i, c) => parseInt($(c).attr('data-ex-index'))).get();
+                const oldArr = data.days[day] || [];
+                const newArr = newOrder.map(idx => oldArr[idx]);
+                data.days[day] = newArr;
+                save();
+                render();
+                initSortables();
+                attemptSaveWithRetry();
+            }
+        });
+        $col.data('sortable', true);
+    });
 }
 
 $(document).on("click", ".editbtn", function () {
@@ -234,18 +484,28 @@ $(document).on("click", ".editbtn", function () {
 let currentDay = null;
 let editingIndex = null;
 
-function addSeriesRow(peso = '', rpe = '', descanso = '') {
+function addSeriesRow(peso = '', reps = '', rpe = '', descanso = '') {
     const row = $(
-        `<div class='seriesitem'>
-            <input placeholder='Peso' value='${peso}'>
-            <input placeholder='RPE' value='${rpe}'>
-            <input placeholder='Descanso' value='${descanso}'>
-            <button class='remove' aria-label='Remover série'><i class="bi bi-x-lg"></i></button>
-        </div>`
+        `<tr class='seriesitem'>
+            <td class='col-index'></td>
+            <td><input placeholder='Peso' value='${peso}'></td>
+            <td><input placeholder='Repetições' value='${reps}'></td>
+            <td><input placeholder='RPE' value='${rpe}'></td>
+            <td><input placeholder='Descanso' value='${descanso}'></td>
+            <td><button class='remove' aria-label='Remover série'><i class="bi bi-x-lg"></i></button></td>
+        </tr>`
     );
 
-    $("#seriesList").append(row);
+    $("#seriesTableBody").append(row);
+    // update indices
+    updateSeriesIndices();
     return row;
+}
+
+function updateSeriesIndices() {
+    $('#seriesTableBody').children('.seriesitem').each(function (i) {
+        $(this).find('.col-index').text(i + 1);
+    });
 }
 
 function openEditor(d, exIndex = null) {
@@ -253,20 +513,29 @@ function openEditor(d, exIndex = null) {
     editingIndex = exIndex;
 
     $("#modalWrap").removeClass("hidden").addClass("flex");
-    $("#seriesList").empty();
+    $("#seriesTableBody").empty();
     $("#modalTitle").text(DAYS[d]);
 
     if (exIndex !== null && data.days[d] && data.days[d][exIndex]) {
         const ex = data.days[d][exIndex];
         $("#exerciseName").val(ex.name);
         $("#exerciseObs").val(ex.obs || '');
-        (ex.series || []).forEach(s => addSeriesRow(s.peso || '', s.rpe || '', s.descanso || ''));
+        (ex.series || []).forEach(s => addSeriesRow(s.peso || '', s.reps || '', s.rpe || '', s.descanso || ''));
         $("#deleteExercise").removeClass('hidden');
     } else {
         $("#exerciseName").val('');
         $("#exerciseObs").val('');
         $("#deleteExercise").addClass('hidden');
     }
+
+    // initialize sortable for series list (allow reordering series inside modal)
+    try {
+        const el = document.getElementById('seriesTableBody');
+        if (el && !$(el).data('sortable')) {
+            new Sortable(el, { animation: 120, draggable: '.seriesitem' });
+            $(el).data('sortable', true);
+        }
+    } catch (e) { console.warn('series sortable init failed', e); }
 }
 
 $("#closeModal").click(() => {
@@ -274,20 +543,17 @@ $("#closeModal").click(() => {
 });
 
 $("#addSeries").click(() => {
-    const row = $(`
-        <div class='seriesitem'>
-            <input placeholder='Peso'>
-            <input placeholder='RPE'>
-            <input placeholder='Descanso'>
-            <button class='remove' aria-label='Remover série'><i class="bi bi-x-lg"></i></button>
-        </div>
-    `);
-
-    $("#seriesList").append(row);
+    addSeriesRow('', '', '', '');
 });
 
 $(document).on("click", ".remove", function () {
-    $(this).parent().remove();
+    $(this).closest('tr').remove();
+    updateSeriesIndices();
+});
+
+// clear validation state when user edits series inputs
+$(document).on('input', '.seriesitem input', function () {
+    $(this).removeClass('input-error');
 });
 
 $("#saveExercise").click(() => {
@@ -297,14 +563,57 @@ $("#saveExercise").click(() => {
     const obs = $("#exerciseObs").val().trim();
     const series = [];
 
+    let validationError = null;
     $(".seriesitem").each(function () {
         const i = $(this).find("input");
-        series.push({
-            peso: i.eq(0).val(),
-            rpe: i.eq(1).val(),
-            descanso: i.eq(2).val()
-        });
+        const pesoVal = i.eq(0).val().trim();
+        const repsVal = i.eq(1).val().trim();
+        const rpeVal = i.eq(2).val().trim();
+        const descVal = i.eq(3).val().trim();
+
+        // clear previous error state
+        i.removeClass('input-error');
+
+        // validations
+        if (rpeVal !== '') {
+            const r = Number(rpeVal);
+            if (!Number.isFinite(r) || r < 1 || r > 10) {
+                validationError = 'RPE deve ser um número entre 1 e 10.';
+                i.eq(1).addClass('input-error');
+            }
+        }
+
+        if (pesoVal !== '') {
+            const p = Number(pesoVal);
+            if (!Number.isFinite(p) || p < 0) {
+                validationError = 'Peso deve ser um número válido.';
+                i.eq(0).addClass('input-error');
+            }
+        }
+
+        if (repsVal !== '') {
+            const rv = Number(repsVal);
+            if (!Number.isInteger(rv) || rv < 0) {
+                validationError = 'Repetições devem ser um número inteiro >= 0.';
+                i.eq(1).addClass('input-error');
+            }
+        }
+
+        if (descVal !== '') {
+            const dval = Number(descVal);
+            if (!Number.isFinite(dval) || dval < 0) {
+                validationError = 'Descanso deve ser um número (ex.: segundos).';
+                i.eq(3).addClass('input-error');
+            }
+        }
+
+        series.push({ peso: pesoVal, reps: repsVal, rpe: rpeVal, descanso: descVal });
     });
+
+    if (validationError) {
+        showToast('warning', validationError);
+        return;
+    }
     if (!data.days[currentDay]) data.days[currentDay] = [];
 
     if (editingIndex !== null && data.days[currentDay] && data.days[currentDay][editingIndex]) {
@@ -313,15 +622,13 @@ $("#saveExercise").click(() => {
         data.days[currentDay].push({ name: nm, obs, series });
     }
     save();
-    saveRemoteData(data).catch(err => {
-        console.warn('saveRemoteData failed', err);
-        const m = err && err.message ? err.message : String(err);
-        Swal.fire({ icon: 'warning', title: 'Não sincronizado', html: `O treino foi salvo localmente, mas não sincronizado com o servidor.<br><small style="opacity:.8">${m}</small>` });
-    });
+    showToast('success', 'Treino salvo');
+    attemptSaveWithRetry();
 
     $("#modalWrap").addClass("hidden").removeClass("flex");
     editingIndex = null;
     render();
+    initSortables();
 });
 
 $("#deleteExercise").click(async () => {
@@ -336,19 +643,17 @@ $("#deleteExercise").click(async () => {
     });
     if (!result.isConfirmed) return;
 
-    if (data.days[currentDay] && data.days[currentDay][editingIndex]) {
-        data.days[currentDay].splice(editingIndex, 1);
-        save();
-        saveRemoteData(data).catch(err => {
-            console.warn('saveRemoteData failed', err);
-            const m = err && err.message ? err.message : String(err);
-            Swal.fire({ icon: 'warning', title: 'Não sincronizado', html: `O treino foi removido localmente, mas a alteração não foi sincronizada.<br><small style="opacity:.8">${m}</small>` });
-        });
-    }
+        if (data.days[currentDay] && data.days[currentDay][editingIndex]) {
+            data.days[currentDay].splice(editingIndex, 1);
+            save();
+            showToast('success', 'Exercício removido');
+            attemptSaveWithRetry();
+        }
 
     editingIndex = null;
     $("#modalWrap").addClass("hidden").removeClass("flex");
     render();
+    initSortables();
 });
 
 // Run PIN lock flow before initializing app UI
@@ -362,7 +667,13 @@ $("#deleteExercise").click(async () => {
 
     // initial render uses localStorage; then try to sync remote
     render();
+    initSortables();
     trySyncOnLoad();
+    // restore previously selected tab and load chat messages
+    try {
+        restoreTab();
+        loadChat();
+    } catch (e) { console.warn('tab/chat restore failed', e); }
 })();
 
 $(document).on('click', '.card', function (e) {

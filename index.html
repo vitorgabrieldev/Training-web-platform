@@ -30,6 +30,15 @@
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- SortableJS for drag-and-drop -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <!-- Mistral API key placeholder: set your key here (insecure in-browser; use a proxy in production) -->
+    <script>
+        // Example: window.MISTRAL_API_KEY = 'sk-xxxx';
+        window.MISTRAL_API_KEY = '';
+        // Use the Vercel serverless proxy endpoint (prototype):
+        window.MISTRAL_PROXY_URL = '/api/mistral-conversations';
+    </script>
 </head>
 
 <body class="bg-slate-900 text-white p-4">
@@ -44,9 +53,46 @@
             </div>
         </div>
     </div>
-    <h2 class="text-xl font-bold mb-4">Treinos Semanais</h2>
+    <div class="app-shell">
+        <div class="tabs" role="tablist" aria-label="Navegação principal">
+            <button class="tab-btn" data-tab="ficha" id="tab-btn-ficha">Ficha</button>
+            <button class="tab-btn" data-tab="chat" id="tab-btn-chat">Treinador</button>
+            <button class="tab-btn" data-tab="calendario" id="tab-btn-calendario">Calendário</button>
+            <button class="tab-btn" data-tab="historico" id="tab-btn-historico">Histórico</button>
+            <button class="tab-btn" data-tab="config" id="tab-btn-config">Configurações</button>
+        </div>
 
-    <div id="weekGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+        <div class="tab-content" id="tab-ficha">
+            <h2 class="text-xl font-bold mb-4">Ficha de treino semanal</h2>
+            <div id="weekGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-chat">
+            <h2 class="text-xl font-bold mb-4">Converse com seu treinador AI</h2>
+            <div class="chat-box">
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-row">
+                    <input id="chatInput" placeholder="Escreva sua pergunta ao treinador..." />
+                    <button id="chatSend" class="btn-primary">Enviar</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-calendario">
+            <h2 class="text-xl font-bold mb-4">Calendário</h2>
+            <div class="note">Calendário simples — placeholder. Aqui você pode integrar um calendário real.</div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-historico">
+            <h2 class="text-xl font-bold mb-4">Histórico</h2>
+            <div id="historyList" class="note">Nenhum histórico ainda.</div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-config">
+            <h2 class="text-xl font-bold mb-4">Configurações</h2>
+            <div class="note">Opções: PIN, sincronização, preferências (placeholder)</div>
+        </div>
+    </div>
 
     <div id="modalWrap" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4">
         <div class="modal">
@@ -59,7 +105,23 @@
                 <button id="addSeries" class="btn-primary small">Adicionar série</button>
             </div>
 
-            <div id="seriesList" class="series-list"></div>
+                        <div id="seriesList" class="series-list">
+                                <div class="table-wrap">
+                                    <table class="series-table modal-series-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Série</th>
+                                                <th>Peso</th>
+                                                <th>Repetições</th>
+                                                <th>RPE</th>
+                                                <th>Descanso</th>
+                                                <th></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="seriesTableBody"></tbody>
+                                    </table>
+                                </div>
+                        </div>
 
             <div class="actions">
                 <button id="saveExercise" class="btn-primary">Salvar</button>
@@ -69,7 +131,8 @@
         </div>
     </div>
 
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="mistral.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="script.js"></script>
 </body>
 
