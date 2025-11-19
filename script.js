@@ -79,6 +79,106 @@ async function trySyncOnLoad() {
 
 const today = (new Date().getDay() + 6) % 7;
 
+// --- PIN system --------------------------------------------------------------
+// Notes:
+// - The default PIN requested (0109) will be used on first run. For security, we store
+//   and compare a SHA-256 hash (salt + pin). This is client-side protection only;
+//   anyone with access to the device/browser can bypass by clearing storage or
+//   manipulating code via devtools. A server-side auth would be required for strong protection.
+
+const PIN_STORAGE_KEY = 'treinos_pin_hash';
+const PIN_SALT_KEY = 'treinos_pin_salt';
+const PIN_UNLOCKED_KEY = 'treinos_pin_unlocked';
+
+// Default: use PIN '0109' on first run — we do NOT store it in plaintext in localStorage.
+// We will initialize the stored hash on first load.
+const DEFAULT_PIN = '0109';
+const DEFAULT_SALT = 'v3ry-r4nd0m-salt';
+
+async function sha256Hex(message) {
+    const msgUint8 = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function ensurePinInitialized() {
+    if (!localStorage.getItem(PIN_STORAGE_KEY)) {
+        // Initialize with default PIN (hash only)
+        const salt = DEFAULT_SALT;
+        const h = await sha256Hex(salt + DEFAULT_PIN);
+        localStorage.setItem(PIN_SALT_KEY, salt);
+        localStorage.setItem(PIN_STORAGE_KEY, h);
+    }
+}
+
+async function verifyPinInput(pin) {
+    const salt = localStorage.getItem(PIN_SALT_KEY) || DEFAULT_SALT;
+    const expected = localStorage.getItem(PIN_STORAGE_KEY);
+    const h = await sha256Hex(salt + pin);
+    return expected === h;
+}
+
+function showPinOverlay() {
+    $('#pinOverlay').removeClass('hidden');
+    $('#pinInput').val('');
+    $('#pinInput').focus();
+}
+
+function hidePinOverlay() {
+    $('#pinOverlay').addClass('hidden');
+}
+
+async function lockCheckFlow() {
+    await ensurePinInitialized();
+    const unlocked = localStorage.getItem(PIN_UNLOCKED_KEY) === '1';
+    if (unlocked) return true;
+
+    // show overlay and wait for correct input
+    showPinOverlay();
+
+    return new Promise(resolve => {
+        $('#pinSubmit').off('click').on('click', async () => {
+            const pin = ($('#pinInput').val() || '').trim();
+            if (!/^[0-9]{4}$/.test(pin)) {
+                Swal.fire({ icon: 'warning', title: 'PIN inválido', text: 'Informe 4 dígitos numéricos.' });
+                return;
+            }
+            const ok = await verifyPinInput(pin);
+            if (ok) {
+                // Always remember / mark unlocked on correct PIN (no checkbox)
+                localStorage.setItem(PIN_UNLOCKED_KEY, '1');
+                hidePinOverlay();
+                resolve(true);
+            } else {
+                // show inline error: red border + small shake, then keep focus
+                const $inp = $('#pinInput');
+                // remove classes to restart animation
+                $inp.removeClass('pin-error shake');
+                // force reflow to restart animation
+                // eslint-disable-next-line no-unused-expressions
+                $inp[0].offsetWidth;
+                $inp.addClass('pin-error shake');
+                $inp.focus();
+
+                // remove the shake class after animation so it can replay next time
+                setTimeout(() => $inp.removeClass('shake'), 400);
+                // when user starts typing again, remove error state
+                $inp.off('input.pinClear').on('input.pinClear', function () {
+                    $(this).removeClass('pin-error');
+                });
+            }
+        });
+
+        // allow Enter key
+        $('#pinInput').off('keydown').on('keydown', function (e) {
+            if (e.key === 'Enter') { $('#pinSubmit').trigger('click'); }
+        });
+    });
+}
+
+// --- end PIN system ----------------------------------------------------------
+
 function render() {
     const g = $("#weekGrid");
     g.empty();
@@ -251,8 +351,19 @@ $("#deleteExercise").click(async () => {
     render();
 });
 
-render();
-trySyncOnLoad();
+// Run PIN lock flow before initializing app UI
+(async function initApp() {
+    try {
+        const ok = await lockCheckFlow();
+        if (!ok) return;
+    } catch (e) {
+        console.error('PIN flow error', e);
+    }
+
+    // initial render uses localStorage; then try to sync remote
+    render();
+    trySyncOnLoad();
+})();
 
 $(document).on('click', '.card', function (e) {
     const day = $(this).closest('.col').find('.editbtn').data('day');
