@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Treinos Semanais</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="style.css" />
+
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyA7jOfxrnqm2bVrfjy6vnrw1ZreSlXsTtU",
+            authDomain: "plataforma-de-treino-478700.firebaseapp.com",
+            projectId: "plataforma-de-treino-478700",
+            storageBucket: "plataforma-de-treino-478700.firebasestorage.app",
+            messagingSenderId: "508989645046",
+            appId: "1:508989645046:web:4d98c43f62f1791f03ccd7"
+        };
+
+        window.FIREBASE_CONFIG = firebaseConfig;
+
+        firebase.initializeApp(firebaseConfig);
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+</head>
+
+<body class="bg-slate-900 text-white p-4">
+    <h2 class="text-xl font-bold mb-4">Treinos Semanais</h2>
+
+    <div id="weekGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"></div>
+
+    <div id="modalWrap" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4">
+        <div class="modal">
+            <h3 id="modalTitle" class="modal-title"></h3>
+
+            <input id="exerciseName" placeholder="Nome do exercício" class="modal-input" />
+            <textarea id="exerciseObs" placeholder="Observações" class="modal-input"></textarea>
+
+            <div style="display:flex; justify-content:space-between; gap:8px; align-items:center">
+                <button id="addSeries" class="btn-primary small">Adicionar série</button>
+                <div class="note" style="margin:0">Adicione séries e use o ícone para remover.</div>
+            </div>
+
+            <div id="seriesList" class="series-list"></div>
+
+            <div class="actions">
+                <button id="saveExercise" class="btn-primary">Salvar</button>
+                <button id="deleteExercise" class="btn-danger hidden">Excluir</button>
+                <button id="closeModal" class="btn-secondary">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
