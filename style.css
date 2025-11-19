@@ -65,6 +65,25 @@ body {
   justify-content: space-between;
 }
 
+.day-meta {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.day-meta-time {
+  font-weight: 600;
+  color: #fff;
+}
+.day-meta-hours {
+  font-size: 12px;
+}
+
 .dayname {
   font-weight: 700;
 }
@@ -240,6 +259,10 @@ body {
   padding: 12px 14px;
   width: 100%;
   max-width: 720px;
+}
+
+.ficha-modal {
+  max-width: 420px;
 }
 
 .modal input,
@@ -762,4 +785,93 @@ hr {
     width: 24px;
     height: 4px;
   }
+}
+
+/* Select2 - tema escuro alinhado ao app */
+.select2-container {
+  min-width: 240px;
+}
+
+.select2-container--default .select2-selection--single {
+  background: #FFF;
+  border: 1px solid #CFC6FF;
+  border-radius: 10px;
+  min-height: 44px;
+  padding: 8px 14px;
+  transition: all .2s ease;
+}
+
+.select2-container--default .select2-selection--single:hover {
+  border-color: #A697FF;
+}
+
+.select2-container--default.select2-container--open .select2-selection--single {
+  border-color: #8A79FF;
+}
+
+.select2-selection--single span {
+  color: #081B2B;
+  font-weight: 600;
+  font-size: 16px !important;
+}
+
+.select2-dropdown {
+  background: #FFFFFF;
+  border: 1px solid #CFC6FF;
+  border-radius: 10px;
+}
+
+.select2-results__option {
+  padding: 12px 14px !important;
+  font-weight: 600;
+  color: #081B2B !important;
+  background: #FFFFFF !important;
+}
+
+.select2-results__option--highlighted {
+  background: #EDE8FF !important;
+  color: #081B2B !important;
+}
+
+.select2-selection__arrow {
+  margin-top: 8px;
+  margin-right: 6px;
+}
+
+.select2-search--dropdown {
+  display: none !important;
+}
+
+/* container overlay quando desabilitado */
+.select-disabled-overlay {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* small inline loader next to the select */
+#fichaLoader {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.loader-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.6);
+  display:inline-block;
+  animation: ficha-bounce 900ms infinite;
+}
+@keyframes ficha-bounce {
+  0% { transform: translateY(0); opacity: .9; }
+  50% { transform: translateY(-6px); opacity: .6; }
+  100% { transform: translateY(0); opacity: .9; }
+}
+
+/* when select disabled, slightly dim */
+.select-disabled-overlay {
+  opacity: .5;
+  pointer-events: none;
 }

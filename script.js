@@ -195,6 +195,35 @@ function buildContextForSend(maxMessages, currentInput) {
     return parts.join('\n');
 }
 
+function buildTrainingSummary() {
+    if (!data || !data.days) return '';
+    const lines = [];
+    lines.push(`Contexto do treino do usuário (gerado em ${new Date().toLocaleString('pt-BR')}):`);
+    for (let i = 0; i < DAYS.length; i++) {
+        const dayExercises = Array.isArray(data.days[i]) ? data.days[i] : [];
+        if (!dayExercises.length) {
+            lines.push(`- ${DAYS[i]}: descanso ou sem exercícios cadastrados.`);
+            continue;
+        }
+        const exLines = dayExercises.slice(0, 5).map(ex => {
+            const base = ex.name || 'Exercício sem nome';
+            const seriesInfo = Array.isArray(ex.series) && ex.series.length
+                ? ex.series.map((s, idx) => {
+                    const peso = s.peso ? `${s.peso}kg` : '';
+                    const reps = s.reps ? `${s.reps} reps` : '';
+                    const descanso = s.descanso ? `${s.descanso}min descanso` : '';
+                    const bits = [peso, reps, descanso].filter(Boolean).join(', ');
+                    return `S${idx + 1}: ${bits || 'sem dados'}`;
+                }).slice(0, 3).join(' | ')
+                : 'sem séries detalhadas';
+            return `${base} (${seriesInfo})`;
+        }).join('; ');
+        lines.push(`- ${DAYS[i]}: ${exLines}${dayExercises.length > 5 ? ' ...' : ''}`);
+    }
+    lines.push('Use essas informações para responder de forma personalizada sobre o treino.');
+    return lines.join('\n');
+}
+
 // --- Chat integration via serverless proxy (`/api/mistral`) --------------
 // The serverless function (on Vercel) should hold the API key in environment
 // variable and forward the request to Mistral. Front-end simply posts to it.
@@ -284,7 +313,9 @@ $('#chatSend').on('click', function () {
         try {
             // build context: last 5 messages (user/ai only)
             const ctx = buildContextForSend(5, txt);
-            const resp = await mistralProxySend(ctx);
+            const trainingCtx = buildTrainingSummary();
+            const prompt = trainingCtx ? `${trainingCtx}\n\nHistórico recente:\n${ctx}` : ctx;
+            const resp = await mistralProxySend(prompt);
             // replace last loading with AI response (with animation)
             replaceLastLoadingWithAi(resp && resp.text ? resp.text : JSON.stringify(resp && resp.raw ? resp.raw : resp));
         } catch (err) {
@@ -375,6 +406,44 @@ function attemptSaveWithRetry() {
 // --- end retry manager -----------------------------------------------------
 
 const today = (new Date().getDay() + 6) % 7;
+
+function seededExtraMinutes(dayIndex, exIndex) {
+    const seed = ((dayIndex + 1) * 73856093) ^ ((exIndex + 1) * 19349663);
+    const x = Math.abs(Math.sin(seed) * 10000);
+    return 1 + Math.floor((x - Math.floor(x)) * 3); // 1-3 minutos
+}
+
+function computeDayTimeMeta(dayIndex) {
+    const exercises = Array.isArray(data.days[dayIndex]) ? data.days[dayIndex] : [];
+    let descansoTotal = 0;
+    let extras = 0;
+    exercises.forEach((ex, exIdx) => {
+        (ex.series || []).forEach(series => {
+            const val = parseFloat(series.descanso);
+            if (Number.isFinite(val) && val > 0) descansoTotal += val;
+        });
+        extras += seededExtraMinutes(dayIndex, exIdx);
+    });
+    const totalMinutes = Math.round(descansoTotal + extras);
+    const start = new Date();
+    const end = new Date(start.getTime() + totalMinutes * 60000);
+    const fmt = (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const pretty = (mins) => {
+        if (mins < 60) return `${mins} min`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        const hours = h === 1 ? '1h' : `${h}h`;
+        if (m === 0) return hours;
+        return `${hours} e ${m} min`;
+    };
+
+    return {
+        totalMinutes,
+        totalLabel: pretty(totalMinutes),
+        startLabel: fmt(start),
+        endLabel: fmt(end)
+    };
+}
 
 // --- PIN system --------------------------------------------------------------
 // Notes:
@@ -486,6 +555,7 @@ function render() {
 
         const col = $('<div class="col"></div>');
         if (i === today) col.addClass("today");
+        const meta = computeDayTimeMeta(i);
 
         const head = $(`
             <div class='dayhead'>
@@ -495,6 +565,13 @@ function render() {
         `);
 
         col.append(head);
+        const metaEl = $(`
+            <div class='day-meta'>
+                <span class='day-meta-time'>≈ ${meta.totalLabel}</span>
+                <span class='day-meta-hours'>${meta.startLabel} → ${meta.endLabel}</span>
+            </div>
+        `);
+        col.append(metaEl);
 
         data.days[key].forEach((ex, exIndex) => {
             const card = $("<div class='card' data-ex-index='" + exIndex + "'></div>");
@@ -766,6 +843,531 @@ $("#deleteExercise").click(async () => {
     initSortables();
 });
 
+// --- Firestore fichas (estrutura nativa compat v9) ---------------------------
+
+const STATIC_USER_ID = 'hNceMxA9i1O71wDSRpWAEuCU8et2'; // usuário fixo (substitua se desejar)
+let currentFichaId = null;
+let currentFichaName = '';
+let fichaNamesCache = {};
+let currentFichaMap = {}; // mapping: dias[index] = { id: diaId, exercicios: [exId,...] }
+let unsubscribes = { fichas: null, dias: null };
+
+function getFirestore() {
+    initFirebaseIfNeeded();
+    if (!firestoreDB) firestoreDB = (window.firebase && firebase.firestore && firebase.firestore()) || null;
+    return firestoreDB;
+}
+
+// helpers
+async function deleteCollectionDocs(colRef) {
+    try {
+        const snap = await colRef.get();
+        const batch = getFirestore().batch();
+        let count = 0;
+        snap.forEach(d => {
+            batch.delete(d.ref);
+            count++;
+        });
+        if (count > 0) await batch.commit();
+    } catch (e) {
+        console.warn('deleteCollectionDocs error', e);
+        // fallback delete individually
+        try {
+            const snap = await colRef.get();
+            for (const d of snap.docs) await d.ref.delete();
+        } catch (e2) { console.error('fallback delete failed', e2); }
+    }
+}
+
+async function criarNovaFicha(userId, nome = null) {
+    try {
+        const db = getFirestore();
+        if (!db) throw new Error('Firestore não inicializado');
+        const nomeFicha = nome || (await Swal.fire({
+            title: 'Nome da nova ficha',
+            input: 'text',
+            inputPlaceholder: 'Ex.: PowerBuilder Semana 1',
+            showCancelButton: true
+        })).value;
+        if (!nomeFicha) return;
+
+        const fichasCol = db.collection('app').doc('users').collection('users').doc(userId).collection('fichas');
+        const docRef = await fichasCol.add({ nomeFicha, created_at: firebase.firestore.FieldValue.serverTimestamp() });
+
+        // criar dias padrão com índice para mapear na UI
+        const diasCol = docRef.collection('dias');
+        for (let i = 0; i < DAYS.length; i++) {
+            const d = await diasCol.add({ titulo: DAYS[i], index: i });
+            // await d.collection('exercicios').add({ nome: 'Exemplo', obs: '' });
+        }
+
+        showToast('success', 'Ficha criada');
+        // refresh list and select new ficha
+        carregarFichas(userId, docRef.id);
+    } catch (e) {
+        console.error('criarNovaFicha error', e);
+        Swal.fire({ icon: 'error', title: 'Erro', text: 'Não foi possível criar ficha.' });
+    }
+}
+
+async function carregarFichas(userId, selectFichaId = null) {
+    try {
+        const db = getFirestore();
+        if (!db) return;
+        // unsub existing listener
+        if (unsubscribes.fichas) { unsubscribes.fichas(); unsubscribes.fichas = null; }
+
+        const fichasCol = db.collection('app').doc('users').collection('users').doc(userId).collection('fichas').orderBy('created_at', 'desc');
+        // realtime update of fichas list
+        unsubscribes.fichas = fichasCol.onSnapshot(snapshot => {
+            const $sel = $('#fichaSelect');
+            // build options quickly
+            const currentVal = $sel.val();
+            $sel.empty();
+            fichaNamesCache = {};
+            snapshot.forEach(doc => {
+                const d = doc.data() || {};
+                const displayName = d.nomeFicha || doc.id;
+                fichaNamesCache[doc.id] = displayName;
+                const opt = $('<option>').attr('value', doc.id).text(displayName);
+                $sel.append(opt);
+            });
+            // update select2 view
+            try {
+                $sel.trigger('change.select2'); // refresh
+            } catch(e){ /* ignore if not select2 */ }
+            syncFichaSelectLabel();
+
+            // pick an item: explicit param > last saved > first option
+            if (selectFichaId) {
+                $sel.val(selectFichaId).trigger('change');
+            } else {
+                const last = localStorage.getItem('last_ficha_id');
+                if (last && $sel.find(`option[value="${last}"]`).length) {
+                    $sel.val(last).trigger('change');
+                } else {
+                    // keep previously selected if still present, otherwise choose first
+                    if (currentVal && $sel.find(`option[value="${currentVal}"]`).length) {
+                        $sel.val(currentVal).trigger('change');
+                    } else {
+                        const first = $sel.find('option').first().val();
+                        if (first) $sel.val(first).trigger('change');
+                        else {
+                            // no fichas: clear data rapidamente
+                            currentFichaId = null;
+                            currentFichaName = '';
+                            data.days = {};
+                            render();
+                            initSortables();
+                            syncFichaSelectLabel();
+                        }
+                    }
+                }
+            }
+        }, err => {
+            console.warn('fichas snapshot error', err);
+            showToast('warning', 'Falha ao listar fichas');
+        });
+
+        // hookup change handler once (works with select2)
+        $('#fichaSelect').off('change').on('change', function () {
+            const f = $(this).val();
+            if (f) {
+                currentFichaName = $(this).find('option:selected').text() || '';
+                localStorage.setItem('last_ficha_id', f);
+                // quick local UI reset so user sees immediate response
+                data.days = {};
+                render();
+                initSortables();
+                // show lightweight loader and load ficha
+                showFichaLoader(true);
+                loadFicha(f);
+            } else {
+                currentFichaId = null;
+                currentFichaName = '';
+                syncFichaSelectLabel();
+            }
+            syncFichaSelectLabel();
+        });
+    } catch (e) {
+        console.error('carregarFichas error', e);
+    }
+}
+
+async function loadFicha(fichaId) {
+    try {
+        const db = getFirestore();
+        if (!db) throw new Error('Firestore não ready');
+
+        // Show lightweight loader and disable select to prevent multiple switches
+        showFichaLoader(true);
+
+        // unsubscribe previous dias listener
+        if (unsubscribes.dias) { unsubscribes.dias(); unsubscribes.dias = null; }
+        currentFichaId = fichaId;
+        currentFichaMap = {};
+        currentFichaName = fichaNamesCache[fichaId] || $('#fichaSelect').find('option:selected').text() || '';
+        syncFichaSelectLabel();
+
+        const baseDocRef = db.collection('app').doc('users').collection('users').doc(STATIC_USER_ID).collection('fichas').doc(fichaId);
+        const diasColRef = baseDocRef.collection('dias').orderBy('index', 'asc');
+
+        // realtime: on any change to dias collection, rebuild local data for the whole ficha
+        unsubscribes.dias = diasColRef.onSnapshot(async snap => {
+            try {
+                // If empty, ensure days exist locally quickly to avoid long blank UI
+                const daysTmp = {};
+                for (let i = 0; i < 6; i++) daysTmp[i] = [];
+
+                // Prepare parallel fetch for each day doc
+                const dayFetchers = snap.docs.map(async (doc, docPos) => {
+                    const diaData = doc.data() || {};
+                    const idx = (typeof diaData.index === 'number') ? diaData.index : docPos;
+                    const diaId = doc.id;
+                    // fetch exercicios for this dia (concurrently)
+                    const exSnap = await doc.ref.collection('exercicios').get();
+                    // for each exercise, fetch series in parallel
+                    const exPromises = exSnap.docs.map(async exDoc => {
+                        const exData = exDoc.data() || {};
+                        // fetch series
+                        const seriesSnap = await exDoc.ref.collection('series').get().catch(()=> ({docs:[]}));
+                        const seriesArr = seriesSnap.docs.map(sdoc => {
+                            const s = sdoc.data() || {};
+                            return { peso: s.peso, reps: s.reps, rpe: s.rpe, descanso: s.descanso };
+                        });
+                        return { id: exDoc.id, name: exData.nome || '', obs: exData.obs || '', series: seriesArr };
+                    });
+                    const exArrWithIds = await Promise.all(exPromises);
+                    return { idx, diaId, exercises: exArrWithIds };
+                });
+
+                // run all day fetchers in parallel
+                const dayResults = await Promise.all(dayFetchers);
+
+                // assemble daysTmp and mapping
+                const mapTmp = {};
+                dayResults.forEach(dr => {
+                    if (typeof dr.idx === 'number') {
+                        daysTmp[dr.idx] = dr.exercises.map(e => ({ name: e.name, obs: e.obs, series: e.series }));
+                        mapTmp[dr.idx] = { id: dr.diaId, exercicios: dr.exercises.map(e=> e.id) };
+                    }
+                });
+
+                // fill missing days with empty arrays (already initialized)
+                data.days = daysTmp;
+                currentFichaMap = { dias: mapTmp };
+                save(); // persist local copy quickly
+                render();
+                initSortables();
+            } catch (e) {
+                console.warn('dias snapshot processing error', e);
+                showToast('warning', 'Erro ao processar dados da ficha');
+            } finally {
+                // hide lightweight loader as soon as we processed the snapshot
+                showFichaLoader(false);
+            }
+        }, err => {
+            console.warn('dias snapshot error', err);
+            // hide loader and notify via toast (no blocking modal)
+            showFichaLoader(false);
+            showToast('warning', 'Falha ao receber atualizações em tempo real.');
+        });
+
+    } catch (e) {
+        console.error('loadFicha error', e);
+        showFichaLoader(false);
+        showToast('warning', 'Erro ao carregar ficha');
+    }
+}
+
+// --- Integrations: JSON import/export, Mistral AI, etc. ----------------------
+
+function createHiddenImportInput() {
+    if (document.getElementById('jsonImportInput')) return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.id = 'jsonImportInput';
+    input.style.display = 'none';
+    input.addEventListener('change', handleJsonImportFile);
+    document.body.appendChild(input);
+}
+
+function triggerJsonImport() {
+    let input = document.getElementById('jsonImportInput');
+    if (!input) {
+        createHiddenImportInput();
+        input = document.getElementById('jsonImportInput');
+    }
+    if (input) input.click();
+}
+
+function exportTrainingJSON() {
+    try {
+        const payload = {
+            version: 'treinos_v1',
+            exportedAt: new Date().toISOString(),
+            fichaId: currentFichaId,
+            days: data.days || {}
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        a.href = url;
+        a.download = `treinos-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('success', 'JSON exportado');
+    } catch (e) {
+        console.error('exportTrainingJSON error', e);
+        Swal.fire({ icon: 'error', title: 'Falha ao exportar', text: e && e.message ? e.message : 'Erro inesperado.' });
+    }
+}
+
+function handleJsonImportFile(evt) {
+    const file = evt.target.files && evt.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            await applyImportedData(parsed);
+            showToast('success', 'Importação concluída');
+        } catch (err) {
+            console.error('JSON import error', err);
+            Swal.fire({ icon: 'error', title: 'Importação falhou', text: err && err.message ? err.message : 'Arquivo inválido.' });
+        } finally {
+            evt.target.value = '';
+        }
+    };
+    reader.readAsText(file, 'utf-8');
+}
+
+async function applyImportedData(payload) {
+    const daysPayload = payload && payload.days ? payload.days : payload;
+    if (!daysPayload || typeof daysPayload !== 'object') throw new Error('Arquivo não contém estrutura "days".');
+
+    const normalized = {};
+    for (let i = 0; i < DAYS.length; i++) {
+        const entry = daysPayload[i] || daysPayload[DAYS[i]] || [];
+        if (!Array.isArray(entry)) {
+            normalized[i] = [];
+            continue;
+        }
+        normalized[i] = entry.map(ex => ({
+            name: (ex && ex.name) || '',
+            obs: (ex && ex.obs) || '',
+            series: Array.isArray(ex && ex.series) ? ex.series.map(s => ({
+                peso: (s && s.peso) || '',
+                reps: (s && s.reps) || '',
+                rpe: (s && s.rpe) || '',
+                descanso: (s && s.descanso) || ''
+            })) : []
+        }));
+    }
+
+    data.days = normalized;
+    save();
+    render();
+    initSortables();
+    attemptSaveWithRetry();
+
+    if (currentFichaId !== null) {
+        for (let i = 0; i < DAYS.length; i++) {
+            try {
+                await persistEntireDayToFirestore(i);
+            } catch (e) {
+                console.warn('persist day after import failed', i, e);
+            }
+        }
+    }
+}
+
+async function persistEntireDayToFirestore(dayIndex) {
+    if (currentFichaId === null) return;
+    if (typeof dayIndex !== 'number' || dayIndex < 0 || dayIndex >= DAYS.length) return;
+
+    const db = getFirestore();
+    if (!db) throw new Error('Firestore não inicializado');
+    if (!currentFichaMap.dias) currentFichaMap.dias = {};
+
+    const fichaDoc = db.collection('app').doc('users').collection('users').doc(STATIC_USER_ID).collection('fichas').doc(currentFichaId);
+    const diasCol = fichaDoc.collection('dias');
+
+    let dayInfo = currentFichaMap.dias[dayIndex];
+    let diaRef;
+
+    if (dayInfo && dayInfo.id) {
+        diaRef = diasCol.doc(dayInfo.id);
+        await diaRef.set({ titulo: DAYS[dayIndex], index: dayIndex }, { merge: true });
+    } else {
+        diaRef = await diasCol.add({ titulo: DAYS[dayIndex], index: dayIndex });
+        currentFichaMap.dias[dayIndex] = { id: diaRef.id, exercicios: [] };
+    }
+
+    const exerciciosCol = diaRef.collection('exercicios');
+    const existingSnap = await exerciciosCol.get();
+    if (!existingSnap.empty) {
+        const batch = db.batch();
+        existingSnap.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    }
+
+    const dayExercises = Array.isArray(data.days[dayIndex]) ? data.days[dayIndex] : [];
+    for (const ex of dayExercises) {
+        const exDoc = await exerciciosCol.add({
+            nome: ex && ex.name ? ex.name : '',
+            obs: ex && ex.obs ? ex.obs : ''
+        });
+        if (Array.isArray(ex && ex.series)) {
+            const seriesCol = exDoc.collection('series');
+            for (const s of ex.series) {
+                await seriesCol.add({
+                    peso: s && s.peso ? s.peso : '',
+                    reps: s && s.reps ? s.reps : '',
+                    rpe: s && s.rpe ? s.rpe : '',
+                    descanso: s && s.descanso ? s.descanso : ''
+                });
+            }
+        }
+    }
+}
+
+function openFichaModal() {
+    if (!currentFichaId) {
+        Swal.fire({ icon: 'info', title: 'Selecione uma ficha', text: 'Escolha uma ficha antes de editar.' });
+        return;
+    }
+    const name = currentFichaName || fichaNamesCache[currentFichaId] || $('#fichaSelect').find('option:selected').text() || '';
+    $('#fichaNameInput').val(name);
+    $('#fichaModalWrap').removeClass('hidden').addClass('flex');
+}
+
+function closeFichaModal() {
+    $('#fichaModalWrap').addClass('hidden').removeClass('flex');
+}
+
+async function renameCurrentFicha(newName) {
+    const trimmed = (newName || '').trim();
+    if (!trimmed) {
+        Swal.fire({ icon: 'warning', title: 'Nome obrigatório', text: 'Informe um nome para a ficha.' });
+        return;
+    }
+    if (!currentFichaId) return;
+    const db = getFirestore();
+    if (!db) throw new Error('Firestore não inicializado');
+    const fichaDoc = db.collection('app').doc('users').collection('users').doc(STATIC_USER_ID).collection('fichas').doc(currentFichaId);
+    await fichaDoc.set({ nomeFicha: trimmed }, { merge: true });
+    currentFichaName = trimmed;
+    fichaNamesCache[currentFichaId] = trimmed;
+    const $sel = $('#fichaSelect');
+    $sel.find(`option[value="${currentFichaId}"]`).text(trimmed);
+    syncFichaSelectLabel();
+    showToast('success', 'Ficha renomeada');
+}
+
+async function cascadeDeleteFicha(fichaId) {
+    const db = getFirestore();
+    if (!db) throw new Error('Firestore não inicializado');
+    const fichaDoc = db.collection('app').doc('users').collection('users').doc(STATIC_USER_ID).collection('fichas').doc(fichaId);
+    const diasSnap = await fichaDoc.collection('dias').get();
+    for (const diaDoc of diasSnap.docs) {
+        const exerciciosSnap = await diaDoc.ref.collection('exercicios').get();
+        for (const exDoc of exerciciosSnap.docs) {
+            const seriesSnap = await exDoc.ref.collection('series').get();
+            for (const serieDoc of seriesSnap.docs) {
+                await serieDoc.ref.delete();
+            }
+            await exDoc.ref.delete();
+        }
+        await diaDoc.ref.delete();
+    }
+    await fichaDoc.delete();
+}
+
+async function deleteCurrentFicha() {
+    if (!currentFichaId) return;
+    const confirm = await Swal.fire({
+        title: 'Excluir ficha?',
+        text: 'Todos os dias e exercícios serão removidos.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Excluir',
+        cancelButtonText: 'Cancelar'
+    });
+    if (!confirm.isConfirmed) return;
+
+    Swal.fire({ title: 'Excluindo...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    try {
+        if (unsubscribes.dias) { unsubscribes.dias(); unsubscribes.dias = null; }
+        await cascadeDeleteFicha(currentFichaId);
+        currentFichaId = null;
+        currentFichaName = '';
+        currentFichaMap = {};
+        data.days = {};
+        render();
+        initSortables();
+        syncFichaSelectLabel();
+        Swal.close();
+        closeFichaModal();
+        showToast('success', 'Ficha removida');
+    } catch (e) {
+        console.error('delete ficha error', e);
+        Swal.close();
+        Swal.fire({ icon: 'error', title: 'Erro ao excluir', text: e && e.message ? e.message : 'Falha inesperada.' });
+    }
+}
+
+// patch existing saveExercise handler to persist to Firestore after local save
+// find the block where $("#saveExercise").click(() => { ... }) is defined and inside it,
+// after save(); attemptSaveWithRetry(); add a call to persistEntireDayToFirestore(currentDay);
+
+// We'll insert a small patch here to wire it (safe to call even if currentFichaId is null)
+(function attachPersistenceHooks() {
+    // Save hook already defined in code; we add an extra click handler that runs after
+    $('#saveExercise').on('click', async function () {
+        // small delay to allow original handler to finish updating data
+        setTimeout(async () => {
+            try {
+                if (currentFichaId !== null) await persistEntireDayToFirestore(currentDay);
+            } catch (e) {
+                console.warn('post-save persistence failed', e);
+            }
+        }, 120);
+    });
+
+    $('#deleteExercise').on('click', async function () {
+        // original handler deletes locally; after that, persist day
+        setTimeout(async () => {
+            try {
+                if (currentFichaId !== null) await persistEntireDayToFirestore(currentDay);
+            } catch (e) {
+                console.warn('post-delete persistence failed', e);
+            }
+        }, 120);
+    });
+
+    // reorder: replace previous onEnd action call to also persist entire day
+    // We patch by delegating to initSortables existing behavior; add additional listener to persist after re-render
+    // Add a small global hook: whenever render() runs, we ensure initSortables called; but to persist reorder, we attach to sortable's onEnd in initSortables already.
+    // To be safe, also listen for mouseup on .col to trigger persistence (no-op if nothing changed).
+    $(document).on('mouseup touchend', '.col', async function () {
+        // try to persist each column that belongs to currentFichaId
+        try {
+            if (!currentFichaId) return;
+            const day = $(this).find('.editbtn').data('day');
+            if (typeof day !== 'undefined') {
+                await persistEntireDayToFirestore(day);
+            }
+        } catch (e) {
+            // ignore noisy errors
+        }
+    });
+})();
+
 // Run PIN lock flow before initializing app UI
 (async function initApp() {
     try {
@@ -792,4 +1394,94 @@ $(document).on('click', '.card', function (e) {
     const cards = $(this).closest('.col').children('.card');
     const cardIndex = cards.index(this);
     openEditor(day, cardIndex);
+});
+
+// added: lightweight ficha loader control (no Swal modal)
+function showFichaLoader(show) {
+    const $loader = $('#fichaLoader');
+    const $sel = $('#fichaSelect');
+    const toggleSelect2Overlay = (enable) => {
+        if (!$sel.hasClass('select2-hidden-accessible')) return;
+        const inst = $sel.data('select2');
+        if (inst && inst.$container) {
+            inst.$container.toggleClass('select-disabled-overlay', !enable);
+        }
+    };
+
+    if (show) {
+        $loader.show();
+        $sel.addClass('select-disabled-overlay');
+        $sel.prop('disabled', true);
+        toggleSelect2Overlay(false);
+    } else {
+        $loader.hide();
+        $sel.removeClass('select-disabled-overlay');
+        $sel.prop('disabled', false);
+        toggleSelect2Overlay(true);
+    }
+}
+
+function syncFichaSelectLabel() {
+    const $sel = $('#fichaSelect');
+    if (!$sel.length) return;
+    const text = $sel.find('option:selected').text() || '';
+    if ($sel.hasClass('select2-hidden-accessible')) {
+        const inst = $sel.data('select2');
+        if (inst && inst.$container) {
+            inst.$container.find('.select2-selection__rendered').text(text).attr('title', text);
+            inst.$container.find('.select2-selection__rendered').attr('title', text);
+        }
+    }
+}
+
+// initialize Select2 and wire ficha select on DOM ready (run earlier in $(function(){...}))
+$(function () {
+    // ensure hidden input exists for import/export features
+    createHiddenImportInput();
+
+    // init select2 on fichaSelect if available
+    try {
+        const $sel = $('#fichaSelect');
+        if ($sel.length && $.fn.select2) {
+            $sel.select2({
+                placeholder: 'Selecione a ficha',
+                width: 'resolve',
+                dropdownAutoWidth: true,
+                // small CSS class to help customize if needed
+                dropdownCssClass: 'select2-dark'
+            });
+        }
+    } catch (e) {
+        console.warn('Select2 init failed', e);
+    }
+
+    // hook up export/import buttons (already present in previous code)
+    $('#exportJsonBtn').off('click').on('click', function () { exportTrainingJSON(); });
+    $('#importJsonBtn').off('click').on('click', function () { triggerJsonImport(); });
+
+    $('#manageFichaBtn').off('click').on('click', openFichaModal);
+    $('#fichaModalClose').off('click').on('click', closeFichaModal);
+    $('#fichaSaveBtn').off('click').on('click', async function () {
+        try {
+            await renameCurrentFicha($('#fichaNameInput').val());
+            closeFichaModal();
+        } catch (e) {
+            console.warn('rename ficha error', e);
+        }
+    });
+    $('#fichaDeleteBtn').off('click').on('click', async function () {
+        await deleteCurrentFicha();
+    });
+
+    // start loading fichas (carregarFichas will not show modal)
+    try {
+        carregarFichas(STATIC_USER_ID);
+    } catch (e) {
+        console.warn('carregarFichas init failed', e);
+    }
+
+    // hookup new ficha button
+    $('#newFichaBtn').off('click').on('click', function () {
+        criarNovaFicha(STATIC_USER_ID);
+    });
 });

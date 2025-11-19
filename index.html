@@ -30,6 +30,10 @@
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Select2 (estilização do select de fichas) -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <!-- SortableJS for drag-and-drop -->
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <!-- Mistral API key placeholder: set your key here (insecure in-browser; use a proxy in production) -->
@@ -60,6 +64,21 @@
             <button class="tab-btn" data-tab="calendario" id="tab-btn-calendario">Calendário</button>
             <button class="tab-btn" data-tab="historico" id="tab-btn-historico">Histórico</button>
             <button class="tab-btn" data-tab="config" id="tab-btn-config">Configurações</button>
+        </div>
+
+        <!-- added: ficha selector toolbar -->
+        <div class="ficha-toolbar" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+            <label for="fichaSelect" style="color:var(--muted)">Ficha:</label>
+            <select id="fichaSelect" style="background:transparent; border:1px solid rgba(255,255,255,0.04); color:inherit; padding:6px 8px; border-radius:8px; min-width:240px"></select>
+            <div id="fichaLoader" style="display:none; margin-left:6px; color:var(--muted); font-size:13px">
+                <span class="loader-dot"></span> Carregando...
+            </div>
+            <button id="newFichaBtn" class="btn-primary small">Nova ficha</button>
+            <div style="margin-left:auto; display:flex; gap:8px;">
+                <button id="manageFichaBtn" class="btn-secondary small">Editar ficha</button>
+                <button id="exportJsonBtn" class="btn-secondary small">Exportar JSON</button>
+                <button id="importJsonBtn" class="btn-secondary small">Importar JSON</button>
+            </div>
         </div>
 
         <div class="tab-content" id="tab-ficha">
@@ -136,8 +155,19 @@
         </div>
     </div>
 
+    <div id="fichaModalWrap" class="fixed inset-0 hidden items-center justify-center bg-black/60 p-4">
+        <div class="modal ficha-modal">
+            <h3 class="modal-title">Editar ficha</h3>
+            <input id="fichaNameInput" placeholder="Nome da ficha" class="modal-input" />
+            <div class="actions">
+                <button id="fichaSaveBtn" class="btn-primary">Salvar alterações</button>
+                <button id="fichaDeleteBtn" class="btn-danger">Excluir ficha</button>
+                <button id="fichaModalClose" class="btn-secondary">Fechar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="mistral.js"></script>
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
     <script src="script.js"></script>
 </body>
 
